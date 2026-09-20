@@ -1,0 +1,363 @@
+================================================================================
+GBSS26.1  |  GBFD-113402 Dynamic Adjustment Between FR and HR
+Sub-feature: 2B  Dynamic TCH HR/FR Conversion DURING A CALL
+             (Dynamic HR/FR Adaptation)
+Source: Huawei Dynamic Channel Conversion Feature Parameter Description
+        Issue 03 (2025-12-20), sections 3.2.3, 4.2, 6.6.1, 6.6.3
+================================================================================
+Replace <CELLID> and <TRXID> before execution.
+Do NOT change HOCTRLSWITCH. Use the algorithm already running on the cell.
+Run LST/DSP first. Save the output as your rollback baseline.
+================================================================================
+
+
+--------------------------------------------------------------------------------
+PHASE 0  —  BASELINE QUERY  (mandatory, do this before any SET)
+--------------------------------------------------------------------------------
+
+// 0.1 Identify the cell handover algorithm (I or II). This decides the SET path.
+LST GCELLHOBASIC: IDTYPE=BYID, CELLID=<CELLID>;
+
+// Record these fields from the LST output:
+//   HOCTRLSWITCH              -> HOALGORITHM1 or HOALGORITHM2
+//   INTRACELLHOEN             -> must be YES for HO II path
+//   INTRACELLFHHOEN           -> used on HO I path
+//   AMRFULLTOHALFHOALLOW      -> current AMR F-H switch
+//   NOAMRFULLTOHALFHOALLOW    -> current non-AMR F-H switch
+//   AMRHALFTOFULLHOQUALALLOW
+//   NOAMRHALFTOFULLHOQUALALLOW
+
+// 0.2 Speech versions currently allowed on the cell
+LST GCELLCCACCESS: IDTYPE=BYID, CELLID=<CELLID>;
+// Record VOICEVER. Half-rate versions MUST already be present, or enable them
+// in Phase 2 before you enable F-H HO.
+
+// 0.3 Assignment-time HR/FR (needed so an idle TCHH/TCHF exists as HO target)
+LST GCELLCHMGAD: IDTYPE=BYID, CELLID=<CELLID>;
+LST GTRXDEV: TRXID=<TRXID>;
+// Repeat LST GTRXDEV for every TRX in the cell.
+// Record TCHAJFLAG, TCHBUSYTHRES, AMRTCHHPRIORALLOW, AMRTCHHPRIORLOAD.
+
+// 0.4 AMR codec sets (needed for AMR F-H HO)
+LST GCELLCCAMR: IDTYPE=BYID, CELLID=<CELLID>;
+
+// 0.5 Conflict check: 1.2 MHz BCCH networking + HR repacking = ping-pong HO
+LST GCELLHOBASIC: IDTYPE=BYID, CELLID=<CELLID>;
+// If HALFRATEREPACKINGSWITCH is YES and 1.2 MHz networking is ON, set
+// HALFRATEREPACKINGSWITCH to NO before enabling this feature.
+
+// 0.6 License (GBFD-113402 is license-controlled)
+DSP LICENSE:;
+LST LICENSE:;
+// Confirm GBFD-113402 Dynamic Adjustment Between FR and HR is activated.
+// For AMR F-H also confirm GBFD-115504 AMR FR/HR Dynamic Adjustment.
+// If the cell uses HO algorithm II, GBFD-510501 HUAWEI II Handover must be on.
+
+
+--------------------------------------------------------------------------------
+PHASE 1  —  PREREQUISITE FEATURES  (enable in this order)
+--------------------------------------------------------------------------------
+Document section 4.2 / Table 6-3:
+
+  1) GBFD-113401  Half Rate Speech
+     Mandatory. During-a-call HO from TCHF to TCHH cannot run without HR.
+
+  2) GBFD-115504  AMR FR/HR Dynamic Adjustment
+     Required for the during-a-call function (document: "depends on either
+     of the features" together with HUAWEI II).
+
+  3) GBFD-510501  HUAWEI II Handover
+     Required ONLY if HOCTRLSWITCH = HOALGORITHM2.
+
+  4) GBFD-113402  Dynamic Adjustment Between FR and HR  (this feature)
+     License must be activated. See License Management Feature Parameter
+     Description.
+
+  Mutually exclusive: none.
+  Do not enable HR repacking together with 1.2 MHz Networking for BCCH TRXs.
+
+
+//----- 1A. Half Rate Speech (GBFD-113401) --------------------------------------
+// Goal: cell must advertise HR speech versions.
+// Keep any FR versions already in service. Add HR if missing.
+// Official 2B activation later requires ALL of these bits ON:
+//   FULL_RATE_VER1, FULL_RATE_VER2, FULL_RATE_VER3 (AMR-FR),
+//   HALF_RATE_VER1, HALF_RATE_VER3 (AMR-HR), FULL_RATE_VER5
+// If AMR is not used on this network, still keep FR v1/v2 and HR v1 at minimum.
+
+SET GCELLCCACCESS: IDTYPE=BYID, CELLID=<CELLID>, VOICEVER=FULL_RATE_VER1-1&FULL_RATE_VER2-1&FULL_RATE_VER3-1&HALF_RATE_VER1-1&HALF_RATE_VER3-1&FULL_RATE_VER5-1;
+
+LST GCELLCCACCESS: IDTYPE=BYID, CELLID=<CELLID>;
+// Expected: VOICEVER contains HALF_RATE_VER1 and HALF_RATE_VER3.
+
+
+//----- 1B. AMR codec (needed for AMR F-H HO, speech v3) -------------------------
+// Do not overwrite a live AMR ACS. If LST GCELLCCAMR already has FR and HR
+// codec sets, skip this SET and keep the live ACS.
+// Example ACS only — replace with the operator AMR plan:
+
+// SET GCELLCCAMR: IDTYPE=BYID, CELLID=<CELLID>, AMRFRSET=12.2-1&7.4-1&5.9-1&4.75-1, AMRHRSET=7.4-1&5.9-1&4.75-1;
+
+LST GCELLCCAMR: IDTYPE=BYID, CELLID=<CELLID>;
+
+
+//----- 1C. Recommended: assignment-time HR/FR conversion (feature 2A) ----------
+// During-a-call HO only starts if an IDLE target channel exists (section 3.2.3.3).
+// If every timeslot is TCHF, FR->HR HO will fail and only congestion counters
+// increase. Enable TCH rate adjust on each TRX in the cell.
+
+SET GTRXDEV: TRXID=<TRXID>, TCHAJFLAG=YES;
+// Repeat for every TRX of the cell.
+
+SET GCELLCHMGAD: IDTYPE=BYID, CELLID=<CELLID>, ENTCHADJALLOW=YES;
+// ENTCHADJALLOW=YES allows intra-cell HO to pack fragments so a couple
+// channel can become a TCHF (needed for HR->FR).
+
+LST GTRXDEV: TRXID=<TRXID>;
+LST GCELLCHMGAD: IDTYPE=BYID, CELLID=<CELLID>;
+// Expected: TCHAJFLAG=YES, ENTCHADJALLOW=YES.
+
+
+--------------------------------------------------------------------------------
+PHASE 2  —  CORE 2B ACTIVATION
+            Follow ONE path only, matching Phase 0 HOCTRLSWITCH
+--------------------------------------------------------------------------------
+Document section 6.6.3.1 / Table 3-2 / Table 6-6 SN1 then SN2.
+
+Parameter order from Huawei MAE Table 6-6:
+  SN1  GCELLHOBASIC   switches
+  SN2  GCELLCCACCESS  speech version (FR -> HR)
+  SN3  GCELLHOBASIC   FR -> HR quality/path/ATCB thresholds
+  SN4  GCELLCCACCESS  speech version (HR -> FR)  [same VOICEVER]
+  SN5  GCELLCHMGAD    load thresholds used with HR -> FR
+  SN6  GCELLHOBASIC   HR -> FR load/path/ATCB thresholds
+
+
+********** PATH A — Handover algorithm I  (HOCTRLSWITCH = HOALGORITHM1) **********
+// Table 3-2 No.1 and section 6.6.3.1 Step 1-2
+// SN1  Enable intra-cell F-H HO based on capacity AND quality.
+//      Do not set INTRACELLFHHOEN=NO here. That is the deactivation value.
+
+SET GCELLHOBASIC: IDTYPE=BYID, CELLID=<CELLID>, HOCTRLSWITCH=HOALGORITHM1, INTRACELLFHHOEN=HOBASECAPANDQUAL, AMRFULLTOHALFHOALLOW=YES, NOAMRFULLTOHALFHOALLOW=YES;
+
+// SN2  Speech versions for FR <-> HR (same command as Phase 1A; safe to re-run)
+SET GCELLCCACCESS: IDTYPE=BYID, CELLID=<CELLID>, VOICEVER=FULL_RATE_VER1-1&FULL_RATE_VER2-1&FULL_RATE_VER3-1&HALF_RATE_VER1-1&HALF_RATE_VER3-1&FULL_RATE_VER5-1;
+
+LST GCELLHOBASIC: IDTYPE=BYID, CELLID=<CELLID>;
+// Expected:
+//   HOCTRLSWITCH           = HOALGORITHM1
+//   INTRACELLFHHOEN        = HOBASECAPANDQUAL
+//   AMRFULLTOHALFHOALLOW   = YES
+//   NOAMRFULLTOHALFHOALLOW = YES
+
+
+********** PATH B — Handover algorithm II (HOCTRLSWITCH = HOALGORITHM2) **********
+// Table 3-2 No.2 and section 6.6.3.1 HO II
+// SN1  Intra-cell HO must be YES. Do not switch a live cell from HO I to HO II
+//      just to enable this feature.
+
+SET GCELLHOBASIC: IDTYPE=BYID, CELLID=<CELLID>, HOCTRLSWITCH=HOALGORITHM2, INTRACELLHOEN=YES, AMRFULLTOHALFHOALLOW=YES, NOAMRFULLTOHALFHOALLOW=YES;
+
+SET GCELLCCACCESS: IDTYPE=BYID, CELLID=<CELLID>, VOICEVER=FULL_RATE_VER1-1&FULL_RATE_VER2-1&FULL_RATE_VER3-1&HALF_RATE_VER1-1&HALF_RATE_VER3-1&FULL_RATE_VER5-1;
+
+LST GCELLHOBASIC: IDTYPE=BYID, CELLID=<CELLID>;
+// Expected:
+//   HOCTRLSWITCH           = HOALGORITHM2
+//   INTRACELLHOEN          = YES
+//   AMRFULLTOHALFHOALLOW   = YES
+//   NOAMRFULLTOHALFHOALLOW = YES
+
+
+// Optional staged rollout (either path): enable AMR F-H first, non-AMR later.
+// SET GCELLHOBASIC: IDTYPE=BYID, CELLID=<CELLID>, AMRFULLTOHALFHOALLOW=YES, NOAMRFULLTOHALFHOALLOW=NO;
+// After AMR KPI is stable:
+// SET GCELLHOBASIC: IDTYPE=BYID, CELLID=<CELLID>, NOAMRFULLTOHALFHOALLOW=YES;
+
+
+--------------------------------------------------------------------------------
+PHASE 3  —  FR -> HR THRESHOLDS  (MAE Table 6-6 SN3)
+            Keep Huawei defaults unless the network plan gives values.
+            Query first, then SET only what you must change.
+--------------------------------------------------------------------------------
+// AMR F-H quality threshold (RXQUAL 0=best, 7=worst).
+// FR->HR requires UL and DL quality <= this threshold, so a small value
+// restricts HR HO to good-quality calls.
+LST GCELLHOBASIC: IDTYPE=BYID, CELLID=<CELLID>;
+
+// SET only if the network plan specifies values. Uncomment and fill:
+// SET GCELLHOBASIC: IDTYPE=BYID, CELLID=<CELLID>, AMRFULLTOHALFHOQUALTHRESH=<value>, NOAMRFULLTOHALFHOPATHTHRESH=<value>, NOAMRFULLTOHALFHOATCBTHRESH=<value>;
+
+// Related FR->HR parameters on the same MO (leave default if not in the plan):
+//   ALLOWHALFRATEUSERPERC          cap on share of MSs already on TCHH
+//   F2HHOLOADSTFSWITCH             load hysteresis ON/OFF
+//   FullToHalfHoLoadStf            hysteresis margin
+//   AMRFULLTOHALFHOTHRESH          AMR cell-load trigger for FR->HR
+//   NOAMRFULLTOHALFTHRESH          non-AMR cell-load trigger for FR->HR
+//   FULLTOHALFHODURATION           window during which qualifying calls are HO'd
+//   AMRFULLTOHALFHOPATHTHRESH      AMR DL path-loss max for FR->HR
+//   AMRFULLTOHALFHOPATHADJSTEP     path-loss step during the trigger window
+//   AMRFULLTOHALFHOATCBTHRESH      AMR ATCB min for FR->HR
+//   AMRFULLTOHALFHOATCBADJSTEP     ATCB step during the trigger window
+//   AMRFULLTOHALFHOQUALTHRESH      AMR UL/DL quality max for FR->HR
+//   NOAMRFULLTOHALFHOPATHTHRESH    non-AMR path-loss max
+//   NOAMRFULLTOHALFHOPATHADJSTEP
+//   NOAMRFULLTOHALFHOATCBTHRESH    non-AMR ATCB min
+//   NOAMRFULLTOHALFHOATCBADJSTEP
+//   NOAMRFULLTOHALFHOQUALTHRESH    non-AMR UL/DL quality max
+//   FULLTOHALFHOPERIOD             step period for path-loss/ATCB offset
+//   FULLTOHALFHOLASTTIME           must stay true this long
+//   FULLTOHALFHOSTATTIME           inside this statistic window
+
+
+--------------------------------------------------------------------------------
+PHASE 4  —  HR -> FR THRESHOLDS  (MAE Table 6-6 SN4 / SN5 / SN6)
+--------------------------------------------------------------------------------
+// SN4  Speech version already set in Phase 2. No extra command.
+
+// SN5  Load used together with HR->FR (common cell).
+// Document 6.1.2: set these to the operator plan.
+// Defaults are recommended if you have no plan.
+// Uncomment and fill:
+// SET GCELLCHMGAD: IDTYPE=BYID, CELLID=<CELLID>, AMRTCHHPRIORALLOW=ON, AMRTCHHPRIORLOAD=<value>, TCHBUSYTHRES=<value>;
+
+// Concentric cell extra (only if HRIUOLDRATESELALLOW=YES):
+// SET GCELLCHMGAD: IDTYPE=BYID, CELLID=<CELLID>, HRIUOLDRATESELALLOW=YES, TCHTRICBUSYOVERLAYTHR=<value>, TCHTRIBUSYUNDERLAYTHR=<value>;
+// AMR concentric load split (only if AMRLOADOPTEN=YES and HRIUOLDRATESELALLOW=YES
+// and AMRTCHHPRIORALLOW=ON):
+// SET GCELLCHMGAD: IDTYPE=BYID, CELLID=<CELLID>, AMRLOADOPTEN=YES, INNAMRTCHHPRIORLOAD=<value>, OUTAMRTCHHPRIORLOAD=<value>;
+
+// SN6  HR -> FR HO thresholds on GCELLHOBASIC
+// SET GCELLHOBASIC: IDTYPE=BYID, CELLID=<CELLID>, AMRHALFTOFULLHOTHRESH=<value>, AMRHALFTOFULLHOPATHTHRESH=<value>, NOAMRHALFTOFULLHOATCBTHRESH=<value>;
+
+// Related HR->FR parameters (leave default if not in the plan):
+//   AMRHALFTOFULLHOQUALALLOW       extra enable for quality-based AMR HR->FR
+//   NOAMRHALFTOFULLHOQUALALLOW     extra enable for quality-based non-AMR HR->FR
+//   AMRHALFTOFULLHOTHRESH          AMR low-load trigger for HR->FR
+//   NOAMRHALFTOFULLTHRESH          non-AMR low-load trigger for HR->FR
+//   HALFTOFULLHODURATION
+//   AMRHALFTOFULLHOPATHTHRESH      AMR path-loss min for HR->FR
+//   AMRHALFTOFULLHOATCBTHRESH      AMR ATCB max for HR->FR
+//   AMRHALFTOFULLHOQUALTHRESH      AMR UL/DL quality min for HR->FR
+//   NOAMRHALFTOFULLHOPATHTHRESH
+//   NOAMRHALFTOFULLHOATCBTHRESH
+//   NOAMRHALFTOFULLHOQUALTHRESH
+//   HALFTOFULLHOLASTTIME
+//   HALFTOFULLHOSTATTIME
+//   HALFRATEREPACKINGSWITCH        pack TCHH fragments; keep NO if 1.2 MHz BCCH networking is ON
+
+
+--------------------------------------------------------------------------------
+PHASE 5  —  VERIFY CONFIGURATION
+--------------------------------------------------------------------------------
+
+LST GCELLHOBASIC: IDTYPE=BYID, CELLID=<CELLID>;
+LST GCELLCCACCESS: IDTYPE=BYID, CELLID=<CELLID>;
+LST GCELLCHMGAD: IDTYPE=BYID, CELLID=<CELLID>;
+LST GTRXDEV: TRXID=<TRXID>;
+LST GCELLCCAMR: IDTYPE=BYID, CELLID=<CELLID>;
+
+// Minimum expected after Path A (HO I):
+//   HOCTRLSWITCH           = HOALGORITHM1
+//   INTRACELLFHHOEN        = HOBASECAPANDQUAL
+//   AMRFULLTOHALFHOALLOW   = YES
+//   NOAMRFULLTOHALFHOALLOW = YES
+//   VOICEVER               includes FR v1/v2/v3/v5 and HR v1/v3
+//   TCHAJFLAG              = YES on each TRX
+
+// Minimum expected after Path B (HO II):
+//   HOCTRLSWITCH           = HOALGORITHM2
+//   INTRACELLHOEN          = YES
+//   AMRFULLTOHALFHOALLOW   = YES
+//   NOAMRFULLTOHALFHOALLOW = YES
+//   VOICEVER               includes FR v1/v2/v3/v5 and HR v1/v3
+//   TCHAJFLAG              = YES on each TRX
+
+
+--------------------------------------------------------------------------------
+PHASE 6  —  ACTIVATION OBSERVATION  (document 6.6.3.2)
+--------------------------------------------------------------------------------
+On BSC LMT:
+  1. Trace A-interface BSSAP and Abis RSL for the cell.
+  2. Make a call with an AMR-capable MS.
+
+FR -> HR expected result:
+  Call setup uses FAMR (full-rate AMR, speech version 3 or 5).
+  During the call, speech version changes to HAMR (half-rate AMR, version 3).
+  Abis: Handover Detection
+  Um:   Handover Complete
+  If SET GCELLSOFT "Assignment Procedure in Intra-Cell HO Allowed" = YES,
+  you will see Assignment Complete instead of Handover Complete.
+
+HR -> FR expected result:
+  Call setup uses HAMR, then changes to FAMR.
+  Same HO Detection / HO Complete (or Assignment Complete) messages.
+
+Counters to watch (section 6.8.2):
+  CELL.CH.CONVERT.REQ.NUM.FR.TO.HR
+  CELL.CH.CONVERT.SUCC.NUM.FR.TO.HR
+  CELL.CH.CONVERT.REQ.NUM.HR.FR
+  CELL.CH.CONVERT.SUCC.NUM.HR.FR
+  CELL.KPI.TCH.CONGESTION.RATE
+  Mean busy TCHH
+    CELL.CH.BUSY.NUM.HR.TRAF.900.AVR + CELL.CH.BUSY.NUM.HR.TRAF.1800.AVR
+
+If convert-request rises but success stays 0: no idle target channel.
+Check TCHAJFLAG=YES and that the cell is not fully blocked/locked.
+
+
+--------------------------------------------------------------------------------
+PHASE 7  —  DEACTIVATION / ROLLBACK  (document 6.6.3.3)
+--------------------------------------------------------------------------------
+
+// Path A (HO I): turn off intra-cell F-H HO
+SET GCELLHOBASIC: IDTYPE=BYID, CELLID=<CELLID>, HOCTRLSWITCH=HOALGORITHM1, INTRACELLFHHOEN=NO;
+LST GCELLHOBASIC: IDTYPE=BYID, CELLID=<CELLID>;
+// Expected: INTRACELLFHHOEN = NO
+
+// Path B (HO II): turn off AMR then non-AMR F-H switches (do not disable
+// intra-cell HO; that would affect other HO types)
+SET GCELLHOBASIC: IDTYPE=BYID, CELLID=<CELLID>, HOCTRLSWITCH=HOALGORITHM2, AMRFULLTOHALFHOALLOW=NO;
+LST GCELLHOBASIC: IDTYPE=BYID, CELLID=<CELLID>;
+SET GCELLHOBASIC: IDTYPE=BYID, CELLID=<CELLID>, HOCTRLSWITCH=HOALGORITHM2, NOAMRFULLTOHALFHOALLOW=NO;
+LST GCELLHOBASIC: IDTYPE=BYID, CELLID=<CELLID>;
+// Expected: both F-H allow parameters = NO
+
+// Optional: also disable assignment-time conversion if you enabled it only for 2B
+// SET GTRXDEV: TRXID=<TRXID>, TCHAJFLAG=NO;
+
+
+--------------------------------------------------------------------------------
+PARAMETER SEQUENCE MAP  (what to SET, in order)
+--------------------------------------------------------------------------------
+Order  MO              Parameter ID                  Action
+-----  --------------  ----------------------------  ---------------------------
+0      (query)         LST GCELLHOBASIC / LICENSE    Decide Path A or Path B
+1      GCELLCCACCESS   VOICEVER                      Prerequisite: FR+HR codecs
+2      GCELLCCAMR      AMRFRSET / AMRHRSET           Prerequisite: AMR ACS
+3      GTRXDEV         TCHAJFLAG                     Prerequisite: idle HR/FR
+4      GCELLCHMGAD     ENTCHADJALLOW                 Prerequisite: fragment pack
+5      GCELLHOBASIC    HOCTRLSWITCH                  Keep current (I or II)
+6a     GCELLHOBASIC    INTRACELLFHHOEN               Path A only: HOBASECAPANDQUAL
+6b     GCELLHOBASIC    INTRACELLHOEN                 Path B only: YES
+7      GCELLHOBASIC    AMRFULLTOHALFHOALLOW          YES  (AMR FR<->HR during call)
+8      GCELLHOBASIC    NOAMRFULLTOHALFHOALLOW        YES  (non-AMR FR<->HR)
+9      GCELLHOBASIC    AMRFULLTOHALFHOQUALTHRESH     FR->HR quality (plan/default)
+10     GCELLHOBASIC    NOAMRFULLTOHALFHOPATHTHRESH   FR->HR path loss (plan/default)
+11     GCELLHOBASIC    NOAMRFULLTOHALFHOATCBTHRESH   FR->HR ATCB (plan/default)
+12     GCELLCHMGAD     AMRTCHHPRIORALLOW             HR->FR related load (plan)
+13     GCELLCHMGAD     AMRTCHHPRIORLOAD              HR->FR related load (plan)
+14     GCELLCHMGAD     TCHBUSYTHRES                  HR->FR related load (plan)
+15     GCELLHOBASIC    AMRHALFTOFULLHOTHRESH         HR->FR load (plan/default)
+16     GCELLHOBASIC    AMRHALFTOFULLHOPATHTHRESH     HR->FR path loss (plan/default)
+17     GCELLHOBASIC    NOAMRHALFTOFULLHOATCBTHRESH   HR->FR ATCB (plan/default)
+
+Trigger logic reminder (section 3.2.3.2):
+  FR->HR (capacity): cell load HIGH, radio quality GOOD, HR user share below cap.
+  HR->FR (quality):  cell load LOW,  OR path loss / ATCB / quality poor.
+  Target cell is always the serving cell.
+  Speech version of the call must match:
+    AMR FR->HR     : FR v3 or FR v5
+    non-AMR FR->HR : FR v1 or FR v2
+    AMR HR->FR     : HR v3
+    non-AMR HR->FR : HR v1
+================================================================================
